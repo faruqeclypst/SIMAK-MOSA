@@ -124,7 +124,7 @@ Write-Ok "Backup selesai"
 # --- 4. Upload hanya file source yang diperlukan --------------------------------
 Write-Step "[4/6] Upload source (client, server, postgres, docker-compose.yml)"
 $remoteTmp = "$RemoteDir/.incoming-$stamp"
-Invoke-Remote "mkdir -p $remoteTmp/client $remoteTmp/server"
+Invoke-Remote "mkdir -p $remoteTmp && mkdir -p $remoteTmp/client $remoteTmp/server && ls -ld $remoteTmp"
 
 $items = @('docker-compose.yml', 'client', 'server', 'postgres')
 foreach ($item in $items) {

@@ -22,7 +22,7 @@ import {
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET as string;
 if (!JWT_SECRET) {
   console.error('[FATAL] JWT_SECRET env tidak diset. Server menolak berjalan tanpa JWT_SECRET.');
   process.exit(1);
