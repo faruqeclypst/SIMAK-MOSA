@@ -1,0 +1,15 @@
+{
+  "name": "simak-mosa-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SIMAK-MOSA - Sistem Informasi Manajemen Akademik SMA Negeri Modal Bangsa",
+  "scripts": {
+    "dev": "npm --prefix client run dev",
+    "dev:client": "npm --prefix client run dev",
+    "dev:server": "npm --prefix server run dev",
+    "build:client": "npm --prefix client run build",
+    "build:server": "npm --prefix server run build",
+    "build": "npm --prefix client run build && npm --prefix server run build",
+    "deploy": "node scripts/deploy.js"
+  }
+}

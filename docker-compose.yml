@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # 1. Database PostgreSQL 16
+  db:
+    image: postgres:16-alpine
+    container_name: simak_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-simakmosa}
+      POSTGRES_USER: ${POSTGRES_USER:-simak_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mosa_super_db_pass_2026}
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-simak_admin} -d ${POSTGRES_DB:-simakmosa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - simak_network
+
+  # 2. PostgREST Service (Direct High-Speed Database REST API)
+  postgrest:
+    image: postgrest/postgrest:v12.2.0
+    container_name: simak_postgrest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:mosa_secret_postgrest_pass_2026@db:5432/${POSTGRES_DB:-simakmosa}
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: web_anon
+      PGRST_SERVER_PORT: 3000
+    ports:
+      - "127.0.0.1:3001:3000"
+    networks:
+      - simak_network
+
+  # 3. Application API Server (Custom Auth, PDF, Multi-role Sync)
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: simak_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      DATABASE_URL: postgres://simak_admin:${POSTGRES_PASSWORD:-mosa_super_db_pass_2026}@db:5432/${POSTGRES_DB:-simakmosa}
+      JWT_SECRET: ${JWT_SECRET:-mosa_secure_jwt_secret_key_2026}
+    ports:
+      - "127.0.0.1:4000:4000"
+    networks:
+      - simak_network
+
+  # 4. Frontend Client (React + TanStack + Tailwind served via Nginx)
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: simak_web
+    restart: unless-stopped
+    ports:
+      - "8085:80"
+    networks:
+      - simak_network
+
+networks:
+  simak_network:
+    name: simak_network
+    driver: bridge
