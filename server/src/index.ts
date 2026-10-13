@@ -22,7 +22,11 @@ import {
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const JWT_SECRET = process.env.JWT_SECRET || 'mosa_secure_jwt_secret_key_2026';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[FATAL] JWT_SECRET env tidak diset. Server menolak berjalan tanpa JWT_SECRET.');
+  process.exit(1);
+}
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -1035,7 +1039,7 @@ app.get('/api/jurnal/riwayat', async (req: Request, res: Response) => {
   res.json({ status: 'success', data: list });
 });
 
-app.post('/api/jurnal', async (req: Request, res: Response) => {
+app.post('/api/jurnal', authenticate, async (req: Request, res: Response) => {
   const { namaGuru, mapel, kelas, jam, materi, absensi, catatan, sesi, semester: reqSemester, tahunAjaran: reqTahunAjaran } = req.body;
   
   const today = getWibNow();
@@ -1861,7 +1865,7 @@ app.post('/api/pocketbase/sync', authenticate, requireRole(['admin']), async (_r
 // ==========================================
 
 // Get Schedules (Supports filter by hari, guru, kelas)
-app.get('/api/admin/jadwal', async (req: Request, res: Response) => {
+app.get('/api/admin/jadwal', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const hari = req.query.hari as string;
   const guru = req.query.guru as string;
   const kelas = req.query.kelas as string;
@@ -1898,7 +1902,7 @@ app.get('/api/admin/jadwal', async (req: Request, res: Response) => {
 });
 
 // Create or Update Schedule Slot
-app.post('/api/admin/jadwal', async (req: Request, res: Response) => {
+app.post('/api/admin/jadwal', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const b = req.body || {};
   const id = b.id;
   const hari = b.hari;
@@ -2019,7 +2023,7 @@ app.post('/api/admin/jadwal', async (req: Request, res: Response) => {
 });
 
 // Delete Schedule Slot
-app.delete('/api/admin/jadwal/:id', async (req: Request, res: Response) => {
+app.delete('/api/admin/jadwal/:id', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const { id } = req.params;
   if (getIsPgConnected()) {
     try {
@@ -2037,7 +2041,7 @@ app.delete('/api/admin/jadwal/:id', async (req: Request, res: Response) => {
 });
 
 // Get Teacher Subjects - Synchronized with PocketBase ExamKu REST API
-app.get('/api/admin/guru-mapel', async (_req: Request, res: Response) => {
+app.get('/api/admin/guru-mapel', authenticate, requireRole(['admin']), async (_req: Request, res: Response) => {
   try {
     // 1. Fetch authentic teachers & assigned subjects directly from PocketBase
     const pbTeachers = await fetchPbTeachers();
@@ -2098,7 +2102,7 @@ app.get('/api/admin/guru-mapel', async (_req: Request, res: Response) => {
 });
 
 // Update Teacher Subjects
-app.post('/api/admin/guru-mapel', async (req: Request, res: Response) => {
+app.post('/api/admin/guru-mapel', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const { namaGuru, mapel } = req.body;
   if (!namaGuru || !mapel) {
     return res.status(400).json({ status: 'error', message: 'Nama guru dan mata pelajaran wajib diisi.' });
@@ -2142,7 +2146,7 @@ app.get('/api/settings/semester', async (_req: Request, res: Response) => {
   });
 });
 
-app.post('/api/admin/semester', async (req: Request, res: Response) => {
+app.post('/api/admin/semester', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const { tahunAjaran, semester } = req.body;
   if (!tahunAjaran || !semester) {
     return res.status(400).json({ status: 'error', message: 'Tahun ajaran dan semester wajib ditentukan.' });
@@ -2184,7 +2188,7 @@ app.post('/api/admin/semester', async (req: Request, res: Response) => {
 // ==========================================
 
 // List all system users
-app.get('/api/admin/users', async (_req: Request, res: Response) => {
+app.get('/api/admin/users', authenticate, requireRole(['admin']), async (_req: Request, res: Response) => {
   if (getIsPgConnected()) {
     try {
       const q = await pool.query(
@@ -2222,7 +2226,7 @@ app.get('/api/admin/users', async (_req: Request, res: Response) => {
 });
 
 // Create new user account
-app.post('/api/admin/users', async (req: Request, res: Response) => {
+app.post('/api/admin/users', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const { username, nama, mapel, role, password, email } = req.body;
   if (!username || !nama || !password) {
     return res.status(400).json({ status: 'error', message: 'Username, nama, dan password wajib diisi.' });
@@ -2253,7 +2257,7 @@ app.post('/api/admin/users', async (req: Request, res: Response) => {
 });
 
 // Update user role
-app.put('/api/admin/users/:id/role', async (req: Request, res: Response) => {
+app.put('/api/admin/users/:id/role', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const { id } = req.params;
   const { role } = req.body;
   if (!role || !['admin', 'wakil_kepala', 'guru', 'piket', 'asrama', 'kurikulum'].includes(role)) {
@@ -2278,7 +2282,7 @@ app.put('/api/admin/users/:id/role', async (req: Request, res: Response) => {
 });
 
 // Reset user password
-app.post('/api/admin/users/:id/reset-password', async (req: Request, res: Response) => {
+app.post('/api/admin/users/:id/reset-password', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const { id } = req.params;
   const { newPassword } = req.body;
   const passToSet = newPassword && newPassword.trim().length >= 6 ? newPassword.trim() : '12345678';
@@ -2299,7 +2303,7 @@ app.post('/api/admin/users/:id/reset-password', async (req: Request, res: Respon
 });
 
 // Update user email (Admin)
-app.put('/api/admin/users/:id/email', async (req: Request, res: Response) => {
+app.put('/api/admin/users/:id/email', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const { id } = req.params;
   const { email } = req.body;
   if (!email) {
@@ -2318,7 +2322,7 @@ app.put('/api/admin/users/:id/email', async (req: Request, res: Response) => {
 });
 
 // Delete user
-app.delete('/api/admin/users/:id', async (req: Request, res: Response) => {
+app.delete('/api/admin/users/:id', authenticate, requireRole(['admin']), async (req: Request, res: Response) => {
   const { id } = req.params;
   if (getIsPgConnected()) {
     try {
@@ -2337,7 +2341,7 @@ app.delete('/api/admin/users/:id', async (req: Request, res: Response) => {
 });
 
 // Reset all operational/transactional data (fresh start) while preserving master data
-app.post('/api/admin/reset-operational-data', async (_req: Request, res: Response) => {
+app.post('/api/admin/reset-operational-data', authenticate, requireRole(['admin']), async (_req: Request, res: Response) => {
   try {
     memoryStore.laporanKurikulum = [];
     memoryStore.riwayatJurnal = [];

@@ -33,6 +33,10 @@ function httpRequest(url: string, options: https.RequestOptions, bodyData?: any)
       });
     });
     req.on('error', (err) => reject(err));
+    // Timeout 8 detik: jangan gantung kalau PocketBase tidak merespon (mis. insiden disk I/O)
+    req.setTimeout(8000, () => {
+      req.destroy(new Error('[PocketBase] Request timeout setelah 8 detik ke ' + url));
+    });
     if (bodyData) {
       req.write(typeof bodyData === 'string' ? bodyData : JSON.stringify(bodyData));
     }

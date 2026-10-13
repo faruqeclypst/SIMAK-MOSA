@@ -67,6 +67,20 @@ function getAuthHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Helper: parse respons + throw jika gagal. Mencegah pesan "berhasil" palsu.
+// Juga menangani 401 (sesi berakhir) dengan membersihkan token.
+async function parseAndCheck(res: Response, aksi: string) {
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.status === 'error') {
+    if (res.status === 401) {
+      try { localStorage.removeItem('mosa_token'); } catch {}
+    }
+    throw new Error(json.message || `${aksi} gagal (HTTP ${res.status})`);
+  }
+  return json;
+}
+
+
 export async function login(username: string, password: string): Promise<{
   success: boolean;
   status?: string;
@@ -307,7 +321,7 @@ export async function simpanPiketMatriks(data: Record<string, Record<string, str
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({ data })
   });
-  return res.json();
+  return parseAndCheck(res, 'Menyimpan matriks piket');
 }
 
 export async function fetchPiketIzin(): Promise<IzinEntry[]> {
@@ -324,7 +338,7 @@ export async function simpanPiketIzin(kelas: string, siswa: string[], status?: s
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({ kelas, siswa, status, keterangan })
   });
-  return res.json();
+  return parseAndCheck(res, 'Menyimpan izin piket');
 }
 
 export async function hapusPiketIzin(id: string) {
@@ -332,7 +346,7 @@ export async function hapusPiketIzin(id: string) {
     method: 'DELETE',
     headers: { ...getAuthHeader() },
   });
-  return res.json();
+  return parseAndCheck(res, 'Menghapus izin piket');
 }
 
 export async function fetchGuruBerhalangan(): Promise<GuruBerhalanganEntry[]> {
@@ -389,7 +403,7 @@ export async function simpanAsramaKehadiran(kelas: string, siswa: string[], stat
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({ kelas, siswa, status, keterangan })
   });
-  return res.json();
+  return parseAndCheck(res, 'Menyimpan kehadiran asrama');
 }
 
 export async function hapusAsramaKehadiran(id: string) {
@@ -397,7 +411,7 @@ export async function hapusAsramaKehadiran(id: string) {
     method: 'DELETE',
     headers: { ...getAuthHeader() },
   });
-  return res.json();
+  return parseAndCheck(res, 'Menghapus kehadiran asrama');
 }
 
 export async function fetchRekapIzinSemua(filters?: { tanggal?: string; kelas?: string } | any): Promise<IzinEntry[]> {
@@ -506,7 +520,7 @@ export async function syncPocketBaseData(): Promise<{
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
   });
-  return res.json();
+  return parseAndCheck(res, 'Sinkronisasi PocketBase');
 }
 
 // ==========================================
@@ -574,7 +588,7 @@ export async function hapusAdminJadwal(id: string) {
     method: 'DELETE',
     headers: { ...getAuthHeader() },
   });
-  return res.json();
+  return parseAndCheck(res, 'Menghapus jadwal');
 }
 
 export async function fetchAdminGuruMapel(): Promise<GuruMapelItem[]> {
@@ -589,7 +603,7 @@ export async function simpanAdminGuruMapel(namaGuru: string, mapel: string) {
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({ namaGuru, mapel }),
   });
-  return res.json();
+  return parseAndCheck(res, 'Menyimpan guru-mapel');
 }
 
 // ==========================================
@@ -613,7 +627,7 @@ export async function updateSemesterSettings(tahunAjaran: string, semester: stri
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({ tahunAjaran, semester }),
   });
-  return res.json();
+  return parseAndCheck(res, 'Menyimpan pengaturan semester');
 }
 
 // ==========================================
@@ -638,7 +652,7 @@ export async function createAdminUser(data: {
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify(data),
   });
-  return res.json();
+  return parseAndCheck(res, 'Membuat akun');
 }
 
 export async function updateUserRole(id: string, role: string) {
@@ -647,7 +661,7 @@ export async function updateUserRole(id: string, role: string) {
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({ role }),
   });
-  return res.json();
+  return parseAndCheck(res, 'Mengubah role');
 }
 
 export async function resetUserPassword(id: string, newPassword?: string) {
@@ -656,7 +670,7 @@ export async function resetUserPassword(id: string, newPassword?: string) {
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({ newPassword }),
   });
-  return res.json();
+  return parseAndCheck(res, 'Reset password');
 }
 
 export async function deleteAdminUser(id: string) {
@@ -664,7 +678,7 @@ export async function deleteAdminUser(id: string) {
     method: 'DELETE',
     headers: { ...getAuthHeader() },
   });
-  return res.json();
+  return parseAndCheck(res, 'Menghapus akun');
 }
 
 export async function updateUserEmail(id: string, email: string) {
@@ -673,7 +687,7 @@ export async function updateUserEmail(id: string, email: string) {
     headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({ email }),
   });
-  return res.json();
+  return parseAndCheck(res, 'Mengubah email');
 }
 
 // ==========================================
