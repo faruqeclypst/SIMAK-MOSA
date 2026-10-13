@@ -833,6 +833,37 @@ app.get('/api/mapel', async (req: Request, res: Response) => {
   res.json({ status: 'success', data: DAFTAR_MAPEL });
 });
 
+// Daftar penghuni asrama (filter tinggal_di_asrama = true)
+app.get('/api/asrama/siswa', authenticate, async (req: Request, res: Response) => {
+  const kelas = req.query.kelas as string;
+  if (getIsPgConnected()) {
+    try {
+      let query = `SELECT s.nama, k.nama_kelas FROM siswa s
+                   JOIN kelas k ON s.kelas_id = k.id
+                   WHERE s.tinggal_di_asrama = TRUE AND s.status = 'aktif'`;
+      const params: any[] = [];
+      if (kelas) {
+        params.push(kelas);
+        query += ` AND k.nama_kelas = $${params.length}`;
+      }
+      query += ' ORDER BY k.nama_kelas, s.nama ASC';
+      const q = await pool.query(query, params);
+      if (kelas) {
+        return res.json({ status: 'success', data: q.rows.map((r: any) => r.nama) });
+      }
+      const map: Record<string, string[]> = {};
+      q.rows.forEach((r: any) => {
+        if (!map[r.nama_kelas]) map[r.nama_kelas] = [];
+        map[r.nama_kelas].push(r.nama);
+      });
+      return res.json({ status: 'success', data: map });
+    } catch (e: any) {
+      return res.status(500).json({ status: 'error', message: 'Gagal memuat penghuni asrama.' });
+    }
+  }
+  return res.json({ status: 'success', data: [] });
+});
+
 app.get('/api/siswa', async (req: Request, res: Response) => {
   const kelas = req.query.kelas as string;
   const status = (req.query.status as string) || 'aktif'; // 'aktif', 'alumni', or 'all'
@@ -946,12 +977,28 @@ app.get('/api/siswa/:id/history', async (req: Request, res: Response) => {
       izinQuery += ' ORDER BY p.tanggal DESC LIMIT 50';
       const izinRes = await pool.query(izinQuery, izinParams);
 
+      // Asrama records — lengkapi riwayat agar mencerminkan kondisi sebenarnya
+      let asramaQuery = `
+        SELECT a.id, a.tanggal as tanggal_asrama, a.status, a.keterangan as alasan,
+               a.dicatat_oleh, a.semester, a.tahun_ajaran, a.nama_kelas
+        FROM asrama_kehadiran a
+        WHERE (a.siswa_id = $1 OR a.nama_siswa = $2)
+      `;
+      const asramaParams: any[] = [student.id, student.nama];
+      if (semester && semester !== 'all' && semester !== 'Semua') {
+        asramaParams.push(semester);
+        asramaQuery += ` AND a.semester = $${asramaParams.length}`;
+      }
+      asramaQuery += ' ORDER BY a.tanggal DESC LIMIT 50';
+      const asramaRes = await pool.query(asramaQuery, asramaParams).catch(() => ({ rows: [] }));
+
       return res.json({
         status: 'success',
         data: {
           student,
           presensi: presensiRes.rows,
           izin: izinRes.rows,
+          asrama: asramaRes.rows,
         }
       });
     } catch (e: any) {
@@ -1139,7 +1186,22 @@ app.post('/api/jurnal', authenticate, async (req: Request, res: Response) => {
       const insertedJurnalId = insertJurnalQ.rows[0]?.id;
 
       // Parse student attendance and record to presensi_jurnal
-      if (insertedJurnalId && absensi && absensi !== 'Semua Hadir' && absensi !== '-') {
+      // Catat SEMUA siswa (termasuk Hadir) agar "semua hadir" bisa dibedakan dari "belum diisi"
+      if (insertedJurnalId && absensi && absensi !== '-') {
+        // Kasus "Semua Hadir": catat seluruh siswa kelas dengan status Hadir
+        if (absensi === 'Semua Hadir' && kelasId) {
+          const allSiswa = await pool.query(
+            'SELECT id, nama FROM siswa WHERE kelas_id = $1 ORDER BY nama',
+            [kelasId]
+          ).catch(() => ({ rows: [] }));
+          for (const sw of allSiswa.rows) {
+            await pool.query(
+              `INSERT INTO presensi_jurnal (jurnal_id, siswa_id, nama_siswa, status, keterangan)
+               VALUES ($1, $2, $3, 'Hadir', 'Hadir')`,
+              [insertedJurnalId, sw.id, sw.nama]
+            ).catch((err) => console.warn('Insert presensi_jurnal (Hadir) warning:', err.message));
+          }
+        } else {
         const studentAbsentParts = String(absensi).split(',').map((s: string) => s.trim()).filter(Boolean);
         for (const part of studentAbsentParts) {
           const firstParen = part.indexOf('(');
@@ -1184,6 +1246,7 @@ app.post('/api/jurnal', authenticate, async (req: Request, res: Response) => {
             [insertedJurnalId, sId, studentName, statusCategory, statusInfo]
           ).catch((err) => console.warn('Insert presensi_jurnal warning:', err.message));
         }
+      }
       }
 
       // Auto-Sync Jurnal Guru to Piket Matriks in Real-time
@@ -1366,40 +1429,52 @@ app.post('/api/piket/matriks', authenticate, requireRole(['piket', 'admin']), as
 
   if (getIsPgConnected() && data && typeof data === 'object') {
     try {
+      // Prioritas sumber: jurnal > inval > manual
+      // Simpan manual HANYA boleh mengisi cell yang kosong atau yang source-nya 'manual'.
+      // Cell dari jurnal (KBM aktual) dan inval tidak boleh ditimpa manual.
+      const today = `(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date`;
       for (const [namaKelas, hours] of Object.entries(data as Record<string, any>)) {
         const kRes = await pool.query('SELECT id FROM kelas WHERE nama_kelas = $1 LIMIT 1', [namaKelas]);
         const kId = kRes.rows[0]?.id || null;
-        if (kId) {
-          await pool.query(
-            `INSERT INTO piket_matriks (tanggal, kelas_id, nama_kelas, jam_1, jam_2, jam_3, jam_4, jam_5, jam_6, jam_7, jam_8, jam_9, jam_10, updated_at)
-             VALUES ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-             ON CONFLICT (tanggal, kelas_id) DO UPDATE SET
-               jam_1 = EXCLUDED.jam_1,
-               jam_2 = EXCLUDED.jam_2,
-               jam_3 = EXCLUDED.jam_3,
-               jam_4 = EXCLUDED.jam_4,
-               jam_5 = EXCLUDED.jam_5,
-               jam_6 = EXCLUDED.jam_6,
-               jam_7 = EXCLUDED.jam_7,
-               jam_8 = EXCLUDED.jam_8,
-               jam_9 = EXCLUDED.jam_9,
-               jam_10 = EXCLUDED.jam_10,
-               updated_at = NOW()`,
-            [
-              kId,
-              namaKelas,
-              hours.jam_1 || null,
-              hours.jam_2 || null,
-              hours.jam_3 || null,
-              hours.jam_4 || null,
-              hours.jam_5 || null,
-              hours.jam_6 || null,
-              hours.jam_7 || null,
-              hours.jam_8 || null,
-              hours.jam_9 || null,
-              hours.jam_10 || null,
-            ]
-          ).catch((e) => console.warn('piket_matriks upsert error:', e.message));
+        if (!kId) continue;
+        // Ambil baris existing untuk cek source per jam
+        const existing = await pool.query(
+          `SELECT jam_1_source, jam_2_source, jam_3_source, jam_4_source, jam_5_source,
+                  jam_6_source, jam_7_source, jam_8_source, jam_9_source, jam_10_source
+           FROM piket_matriks WHERE tanggal = ${today} AND kelas_id = $1`,
+          [kId]
+        ).catch(() => ({ rows: [] }));
+        const srcRow = existing.rows[0] || {};
+        // Bangun SET clause hanya untuk jam yang boleh ditimpa
+        const setClauses: string[] = [];
+        const params: any[] = [kId, namaKelas];
+        let paramIdx = 3;
+        let skipped = 0;
+        for (let j = 1; j <= 10; j++) {
+          const newVal = (hours as any)[`jam_${j}`] || null;
+          const curSrc = srcRow[`jam_${j}_source`];
+          // Lindungi: jangan timpa cell dari jurnal/inval
+          if (curSrc === 'jurnal' || curSrc === 'inval') {
+            skipped++;
+            continue;
+          }
+          setClauses.push(`jam_${j} = $${paramIdx}, jam_${j}_source = 'manual'`);
+          params.push(newVal);
+          paramIdx++;
+        }
+        if (setClauses.length === 0) continue;
+        const cols = Array.from({ length: 10 }, (_, i) => `jam_${i + 1}`).join(', ');
+        const vals = Array.from({ length: 10 }, (_, i) => `$${i + 3}`).join(', ');
+        await pool.query(
+          `INSERT INTO piket_matriks (tanggal, kelas_id, nama_kelas, ${cols}, updated_at)
+           VALUES (${today}, $1, $2, ${vals}, NOW())
+           ON CONFLICT (tanggal, kelas_id) DO UPDATE SET
+             ${setClauses.join(', ')},
+             updated_at = NOW()`,
+          params
+        ).catch((e) => console.warn('piket_matriks upsert error:', e.message));
+        if (skipped > 0) {
+          console.log(`[Matriks] ${namaKelas}: ${skipped} cell dilindungi (dari jurnal/inval), tidak ditimpa manual.`);
         }
       }
     } catch (e) {
@@ -1454,11 +1529,15 @@ app.post('/api/piket/izin', authenticate, requireRole(['piket', 'admin']), async
   memoryStore.rekapIzin.unshift(...entries);
   saveMemoryStore();
 
+  // Deduplikasi: lewati siswa yang sudah tercatat di asrama hari ini
+  const duplikat: string[] = [];
+  const siswaList = Array.isArray(siswa) ? siswa : [siswa];
+
   if (getIsPgConnected()) {
     try {
       const kRes = await pool.query('SELECT id FROM kelas WHERE nama_kelas = $1 LIMIT 1', [kelas]);
       const kId = kRes.rows[0]?.id || null;
-      for (const namaSiswa of (Array.isArray(siswa) ? siswa : [siswa])) {
+      for (const namaSiswa of siswaList) {
         let sId = null;
         if (kId) {
           const sRes = await pool.query(
@@ -1466,6 +1545,17 @@ app.post('/api/piket/izin', authenticate, requireRole(['piket', 'admin']), async
             [namaSiswa, kId]
           );
           sId = sRes.rows[0]?.id || null;
+        }
+        // Cek duplikat di asrama_kehadiran hari ini
+        const dupCheck = await pool.query(
+          `SELECT id FROM asrama_kehadiran
+           WHERE tanggal = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date
+           AND LOWER(TRIM(nama_siswa)) = LOWER(TRIM($1)) LIMIT 1`,
+          [namaSiswa]
+        ).catch(() => ({ rows: [] }));
+        if (dupCheck.rows.length > 0) {
+          duplikat.push(namaSiswa);
+          continue;
         }
         await pool.query(
           `INSERT INTO piket_izin_siswa (tanggal, kelas_id, nama_kelas, siswa_id, nama_siswa, status, keterangan, dicatat_oleh)
@@ -1478,7 +1568,11 @@ app.post('/api/piket/izin', authenticate, requireRole(['piket', 'admin']), async
     }
   }
 
-  res.json({ status: 'success', message: `${entries.length} data izin siswa berhasil disimpan.` });
+  const tersimpan = entries.length - duplikat.length;
+  const msg = duplikat.length > 0
+    ? `${tersimpan} data izin disimpan. ${duplikat.length} dilewati (sudah tercatat di Asrama): ${duplikat.join(', ')}`
+    : `${entries.length} data izin siswa berhasil disimpan.`;
+  res.json({ status: 'success', message: msg, duplikat });
 });
 
 // Delete Piket Izin
@@ -1568,11 +1662,14 @@ app.post('/api/piket/guru-berhalangan', authenticate, async (req: Request, res: 
               const num = parseInt(jp.replace(/\D/g, ''));
               if (num >= 1 && num <= 8) {
                 const colName = `jam_${num}`;
+                const srcCol = `jam_${num}_source`;
+                // Proteksi: inval tidak boleh menimpa cell dari jurnal (KBM aktual lebih prioritas)
                 await pool.query(
-                  `INSERT INTO piket_matriks (tanggal, kelas_id, nama_kelas, ${colName}, updated_at)
-                   VALUES ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date, $1, $2, $3, NOW())
+                  `INSERT INTO piket_matriks (tanggal, kelas_id, nama_kelas, ${colName}, ${srcCol}, updated_at)
+                   VALUES ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date, $1, $2, $3, 'inval', NOW())
                    ON CONFLICT (tanggal, kelas_id) DO UPDATE SET
-                     ${colName} = EXCLUDED.${colName},
+                     ${colName} = CASE WHEN piket_matriks.${srcCol} = 'jurnal' THEN piket_matriks.${colName} ELSE EXCLUDED.${colName} END,
+                     ${srcCol} = CASE WHEN piket_matriks.${srcCol} = 'jurnal' THEN piket_matriks.${srcCol} ELSE 'inval' END,
                      updated_at = NOW()`,
                   [kId, j.nama_kelas, val]
                 ).catch(() => {});
@@ -1695,11 +1792,16 @@ app.post('/api/asrama/kehadiran', authenticate, requireRole(['asrama', 'pengasuh
   memoryStore.rekapIzin.unshift(...entries);
   saveMemoryStore();
 
+  // Deduplikasi: lewati siswa yang sudah tercatat di piket hari ini
+  const duplikat: string[] = [];
+  const bukanPenghuni: string[] = [];
+  const siswaList = Array.isArray(siswa) ? siswa : [siswa];
+
   if (getIsPgConnected()) {
     try {
       const kRes = await pool.query('SELECT id FROM kelas WHERE nama_kelas = $1 LIMIT 1', [kelas]);
       const kId = kRes.rows[0]?.id || null;
-      for (const namaSiswa of (Array.isArray(siswa) ? siswa : [siswa])) {
+      for (const namaSiswa of siswaList) {
         let sId = null;
         if (kId) {
           const sRes = await pool.query(
@@ -1707,6 +1809,26 @@ app.post('/api/asrama/kehadiran', authenticate, requireRole(['asrama', 'pengasuh
             [namaSiswa, kId]
           );
           sId = sRes.rows[0]?.id || null;
+        }
+        // Validasi: pastikan siswa adalah penghuni asrama
+        const penghuniCheck = await pool.query(
+          `SELECT tinggal_di_asrama FROM siswa
+           WHERE LOWER(TRIM(nama)) = LOWER(TRIM($1)) LIMIT 1`,
+          [namaSiswa]
+        ).catch(() => ({ rows: [] }));
+        if (penghuniCheck.rows.length > 0 && penghuniCheck.rows[0].tinggal_di_asrama === false) {
+          bukanPenghuni.push(namaSiswa);
+        }
+        // Cek duplikat di piket_izin_siswa hari ini
+        const dupCheck = await pool.query(
+          `SELECT id FROM piket_izin_siswa
+           WHERE tanggal = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date
+           AND LOWER(TRIM(nama_siswa)) = LOWER(TRIM($1)) LIMIT 1`,
+          [namaSiswa]
+        ).catch(() => ({ rows: [] }));
+        if (dupCheck.rows.length > 0) {
+          duplikat.push(namaSiswa);
+          continue;
         }
         await pool.query(
           `INSERT INTO asrama_kehadiran (tanggal, kelas_id, nama_kelas, siswa_id, nama_siswa, status, keterangan, dicatat_oleh)
@@ -1719,7 +1841,14 @@ app.post('/api/asrama/kehadiran', authenticate, requireRole(['asrama', 'pengasuh
     }
   }
 
-  res.json({ status: 'success', message: `${entries.length} laporan pengasuhan asrama berhasil disimpan.` });
+  const tersimpan = entries.length - duplikat.length;
+  let msg = duplikat.length > 0
+    ? `${tersimpan} laporan asrama disimpan. ${duplikat.length} dilewati (sudah tercatat di Piket): ${duplikat.join(', ')}`
+    : `${entries.length} laporan pengasuhan asrama berhasil disimpan.`;
+  if (bukanPenghuni.length > 0) {
+    msg += ` Perhatian: ${bukanPenghuni.join(', ')} tercatat bukan penghuni asrama.`;
+  }
+  res.json({ status: 'success', message: msg, duplikat, bukanPenghuni });
 });
 
 // Delete Asrama Kehadiran

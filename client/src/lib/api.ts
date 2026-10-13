@@ -267,6 +267,16 @@ export async function fetchSiswa(kelas?: string): Promise<string[] | Record<stri
   return json.data || [];
 }
 
+// Daftar penghuni asrama (filter tinggal_di_asrama)
+export async function fetchAsramaSiswa(kelas?: string): Promise<string[] | Record<string, string[]>> {
+  const url = kelas
+    ? `${API_BASE}/asrama/siswa?kelas=${encodeURIComponent(kelas)}`
+    : `${API_BASE}/asrama/siswa`;
+  const res = await fetch(url, { headers: { ...getAuthHeader() } });
+  const json = await res.json().catch(() => ({}));
+  return json.data || [];
+}
+
 export async function fetchJurnalRiwayat(namaGuru?: string): Promise<JurnalEntry[]> {
   const url = namaGuru ? `${API_BASE}/jurnal/riwayat?guru=${encodeURIComponent(namaGuru)}` : `${API_BASE}/jurnal/riwayat`;
   const res = await fetch(url);

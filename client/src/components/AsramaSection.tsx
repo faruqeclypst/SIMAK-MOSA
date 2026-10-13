@@ -16,7 +16,7 @@ import {
   simpanAsramaKehadiran,
   hapusAsramaKehadiran,
   fetchKelas,
-  fetchSiswa,
+  fetchAsramaSiswa,
   IzinEntry
 } from '../lib/api';
 import { Trash2 } from 'lucide-react';
@@ -58,10 +58,10 @@ export const AsramaSection: React.FC = () => {
     }
   }, [validKelasList, selectedKelas]);
 
-  // Query: Student List for currently selected class
+  // Query: hanya penghuni asrama (filter tinggal_di_asrama)
   const { data: rawSiswa = [], isLoading: isLoadingSiswa } = useQuery({
-    queryKey: ['siswa', selectedKelas],
-    queryFn: () => fetchSiswa(selectedKelas) as Promise<string[]>,
+    queryKey: ['asramaSiswa', selectedKelas],
+    queryFn: () => fetchAsramaSiswa(selectedKelas) as Promise<string[]>,
     enabled: !!selectedKelas,
   });
   const siswaList: string[] = Array.isArray(rawSiswa) ? rawSiswa : [];
